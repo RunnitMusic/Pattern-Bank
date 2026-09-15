@@ -1,0 +1,59 @@
+name: macOS beta report
+description: Report native Pattern Bank loading or behavior in FL Studio for macOS
+title: "[macOS beta]: "
+labels: ["macOS", "beta"]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for helping test the experimental native macOS build. Please avoid important projects during the first load test.
+  - type: dropdown
+    id: processor
+    attributes:
+      label: Mac processor
+      options:
+        - Apple Silicon
+        - Intel
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version
+      placeholder: e.g. macOS 15.6
+    validations:
+      required: true
+  - type: input
+    id: flstudio
+    attributes:
+      label: FL Studio version and build
+      placeholder: e.g. FL Studio 2025.2 build 4601
+    validations:
+      required: true
+  - type: dropdown
+    id: runtime
+    attributes:
+      label: FL Studio runtime
+      options:
+        - Native Apple Silicon
+        - Rosetta
+        - Native Intel
+    validations:
+      required: true
+  - type: checkboxes
+    id: results
+    attributes:
+      label: Test results
+      options:
+        - label: FL Studio recognized Pattern Bank
+        - label: The editor opened
+        - label: Project tempo sync worked
+        - label: Internal-controller outputs appeared
+        - label: Patcher accepted controller outputs
+        - label: Saved state survived closing and reopening the project
+  - type: textarea
+    id: details
+    attributes:
+      label: Details and reproduction steps
+      description: Include where the package was installed and any error shown by FL Studio or macOS.
+    validations:
+      required: true

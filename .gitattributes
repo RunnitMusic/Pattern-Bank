@@ -1,0 +1,12 @@
+* text=auto
+
+# Shell scripts must remain executable on macOS/Linux runners.
+*.sh text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.ps1 text eol=crlf
+
+# Binary assets.
+*.png binary
+*.dll binary
+*.dylib binary

@@ -1,0 +1,62 @@
+name: Native builds
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: Windows x64
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: >-
+          cmake -S . -B build-ci -A x64
+          -DSTEPSHAPER_BUILD_FL_PLUGIN=ON
+          -DSTEPSHAPER_BUILD_PREVIEW=ON
+          -DSTEPSHAPER_BUILD_TESTS=ON
+      - name: Build
+        run: cmake --build build-ci --config Release --parallel
+      - name: Test
+        run: ctest --test-dir build-ci -C Release --output-on-failure
+      - name: Upload Windows package
+        uses: actions/upload-artifact@v4
+        with:
+          name: Pattern-Bank-Windows-x64
+          path: build-ci/package/Pattern Bank
+          if-no-files-found: error
+
+  macos:
+    name: macOS universal experimental
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: >-
+          cmake -S . -B build-ci -G Xcode
+          -DSTEPSHAPER_BUILD_FL_PLUGIN=ON
+          -DSTEPSHAPER_BUILD_PREVIEW=ON
+          -DSTEPSHAPER_BUILD_TESTS=ON
+          -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+          -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
+      - name: Build
+        run: cmake --build build-ci --config Release --parallel
+      - name: Test
+        run: ctest --test-dir build-ci -C Release --output-on-failure
+      - name: Ad-hoc sign experimental plug-in
+        run: codesign --force --sign - "build-ci/package/Pattern Bank/Pattern Bank_x64.dylib"
+      - name: Verify architectures and signature
+        run: |
+          lipo -archs "build-ci/package/Pattern Bank/Pattern Bank_x64.dylib"
+          codesign --verify --verbose "build-ci/package/Pattern Bank/Pattern Bank_x64.dylib"
+      - name: Upload macOS package
+        uses: actions/upload-artifact@v4
+        with:
+          name: Pattern-Bank-macOS-Universal-Experimental
+          path: build-ci/package/Pattern Bank
+          if-no-files-found: error

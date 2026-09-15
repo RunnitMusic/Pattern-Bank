@@ -1,0 +1,32 @@
+[package]
+authors = ["Tonika <tonikasoft@gmail.com>"]
+description = "FL Studio SDK"
+edition = "2018"
+license-file = "LICENSE"
+name = "fpsdk"
+readme = "README.md"
+repository = "https://github.com/tonikasoft/fpsdk"
+version = "1.0.3"
+
+[package.metadata.docs.rs]
+targets = [ "x86_64-apple-darwin", "x86_64-pc-windows-msvc" ]
+
+[dependencies]
+bitflags = "1.2"
+hresult = "0.0.1"
+log = "0.4"
+
+[build-dependencies]
+cc = { version = "1.0", features = ["parallel"] }
+
+[dev-dependencies]
+bincode = "1.2"
+log = "0.4"
+serde = { version = "1.0", features = ["derive"] }
+simple-logging = "2.0"
+simplelog = "0.7"
+
+[[example]]
+name = "simple"
+path = "examples/simple.rs"
+crate-type = ["cdylib"]

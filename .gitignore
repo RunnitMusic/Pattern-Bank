@@ -1,0 +1,23 @@
+# CMake and IDE outputs
+/build*/
+/out/
+/.vs/
+/.vscode/
+CMakeUserPresets.json
+
+# Local analysis and temporary artifacts
+/video-analysis/
+/.local-tools/
+/third_party/fpsdk/.git.disabled/
+*.log
+*.tmp
+
+# Platform metadata
+.DS_Store
+Thumbs.db
+
+# Signing material must never be committed
+*.p12
+*.cer
+*.mobileprovision
+*.provisionprofile
