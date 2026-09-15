@@ -241,7 +241,10 @@ private:
 
     mutable std::mutex mutex;
     std::unique_ptr<ProjectState> state;
-    std::atomic<std::shared_ptr<const ProjectState>> published;
+    // Use the shared_ptr atomic free functions instead of atomic<shared_ptr>.
+    // The latter is a C++20 specialization that older Apple libc++ SDKs do not
+    // expose consistently when Xcode builds a universal target.
+    std::shared_ptr<const ProjectState> published;
     std::vector<ProjectState> undoStack;
     std::vector<ProjectState> redoStack;
     bool gestureOpen = false;

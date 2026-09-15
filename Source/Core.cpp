@@ -1082,12 +1082,13 @@ Model::Model() : state (std::make_unique<ProjectState>())
 {
     ProjectState::initialiseDefaults (*state);
     writeRealtimeFromStateLocked();
-    published.store (std::make_shared<const ProjectState> (*state), std::memory_order_release);
+    std::atomic_store_explicit (&published, std::make_shared<const ProjectState> (*state),
+                                std::memory_order_release);
 }
 
 std::shared_ptr<const ProjectState> Model::snapshot() const noexcept
 {
-    return published.load (std::memory_order_acquire);
+    return std::atomic_load_explicit (&published, std::memory_order_acquire);
 }
 
 void Model::pushUndoLocked()
@@ -1111,7 +1112,8 @@ void Model::publishLocked (bool updateRealtime)
     state->validate();
     for (auto& lane : state->lanes) storeActivePatternSettings (lane);
     ++state->revision;
-    published.store (std::make_shared<const ProjectState> (*state), std::memory_order_release);
+    std::atomic_store_explicit (&published, std::make_shared<const ProjectState> (*state),
+                                std::memory_order_release);
     if (updateRealtime) writeRealtimeFromStateLocked();
 }
 

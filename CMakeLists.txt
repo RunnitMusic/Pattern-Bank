@@ -23,6 +23,8 @@ target_compile_features(StepShaperCore PUBLIC cxx_std_20)
 
 if(MSVC)
     target_compile_options(StepShaperCore PRIVATE /W4 /permissive- /EHsc)
+    target_compile_definitions(StepShaperCore PRIVATE
+        _SILENCE_CXX20_OLD_SHARED_PTR_ATOMIC_SUPPORT_DEPRECATION_WARNING)
 else()
     target_compile_options(StepShaperCore PRIVATE -Wall -Wextra -Wpedantic)
 endif()
