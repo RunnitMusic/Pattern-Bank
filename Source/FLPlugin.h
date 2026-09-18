@@ -10,7 +10,7 @@
 #include <atomic>
 #include <memory>
 #include <mutex>
-#include <unordered_set>
+#include <unordered_map>
 
 namespace stepshaper
 {
@@ -49,7 +49,8 @@ private:
     void editorRetriggerChanged (int lane, bool isDown);
     void showParameterMenu (int lane, Parameter parameter, juce::Point<int> screenPosition);
     void handleMidiMessage (intptr_t message);
-    void releaseVoice (TVoiceHandle handle);
+    void releaseVoice (TVoiceHandle handle, bool queueHostRetirement);
+    void retireReleasedHostVoices();
     static Parameter parameterFromIndex (int index) noexcept;
     static int laneFromParameterIndex (int index) noexcept;
     static void copyName (char* destination, const std::string& source) noexcept;
@@ -69,7 +70,11 @@ private:
     bool sentUsingPatcherEncoding = false;
     int modelListenerToken = 0;
     std::mutex midiMutex;
-    std::unordered_set<TVoiceHandle> activeVoices;
+    // FL uses two distinct voice identifiers: the handle returned by this plug-in
+    // for callbacks, and the host-owned SetTag passed to TriggerVoice. Host voice
+    // methods must receive the latter.
+    std::unordered_map<TVoiceHandle, intptr_t> activeVoices;
+    std::unordered_map<TVoiceHandle, intptr_t> pendingHostVoiceKills;
     std::array<bool, 16 * 128> activeMidiNotes {};
     std::array<std::atomic<bool>, maxLanes> retriggerParameterDown {};
     TVoiceHandle nextVoiceHandle = 1;

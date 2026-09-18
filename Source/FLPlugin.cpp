@@ -95,7 +95,10 @@ FLPlugin::FLPlugin (TFruityPlugHost* hostToUse, TPluginTag tagToUse)
         if (host != nullptr)
             host->Dispatcher (HostTag, FHD_SetDirty, 0, 1);
     });
-    if (host != nullptr) host->Dispatcher (HostTag, FHD_SetNumPresets, 0, static_cast<int> (FactoryBank::count));
+    if (host != nullptr)
+    {
+        host->Dispatcher (HostTag, FHD_SetNumPresets, 0, static_cast<int> (FactoryBank::count));
+    }
 }
 
 FLPlugin::~FLPlugin()
@@ -327,6 +330,10 @@ int _stdcall FLPlugin::ProcessParam (int index, intptr_t value, int recFlags)
 
 void _stdcall FLPlugin::NewTick()
 {
+    // Voice_Release is called while FL owns its voice lock. Defer the host call
+    // until this mixer-thread callback, where FL controller/voice APIs are safe.
+    retireReleasedHostVoices();
+
     TFPTime time {};
     TFPTime runningTime {};
     if (host != nullptr)
@@ -474,7 +481,7 @@ void FLPlugin::editorRetriggerChanged (int lane, bool isDown)
 
 void _stdcall FLPlugin::Eff_Render (PWAV32FS, PWAV32FS, int) {}
 void _stdcall FLPlugin::Gen_Render (PWAV32FS, int& length) { length = 0; }
-TVoiceHandle _stdcall FLPlugin::TriggerVoice (PVoiceParams, intptr_t)
+TVoiceHandle _stdcall FLPlugin::TriggerVoice (PVoiceParams, intptr_t setTag)
 {
     std::lock_guard lock (midiMutex);
     // FL may report the same note through both raw MIDI and voice callbacks.
@@ -485,12 +492,18 @@ TVoiceHandle _stdcall FLPlugin::TriggerVoice (PVoiceParams, intptr_t)
     const auto overlapping = ! activeVoices.empty();
     const auto handle = nextVoiceHandle++;
     if (nextVoiceHandle == FVH_Null || nextVoiceHandle == 0) nextVoiceHandle = 1;
-    activeVoices.insert (handle);
+    activeVoices.emplace (handle, setTag);
     engine.requestMidiTrigger (overlapping);
     return handle;
 }
-void _stdcall FLPlugin::Voice_Release (TVoiceHandle handle) { releaseVoice (handle); }
-void _stdcall FLPlugin::Voice_Kill (TVoiceHandle handle) { releaseVoice (handle); }
+void _stdcall FLPlugin::Voice_Release (TVoiceHandle handle)
+{
+    // FL calls voice functions while holding its plug-in lock. Calling back to
+    // host->Voice_Kill here can deadlock when a Patcher wire or this instance is
+    // being removed, so queue the host-side retirement for NewTick.
+    releaseVoice (handle, true);
+}
+void _stdcall FLPlugin::Voice_Kill (TVoiceHandle handle) { releaseVoice (handle, false); }
 int _stdcall FLPlugin::Voice_ProcessEvent (TVoiceHandle, int, int, int) { return 0; }
 int _stdcall FLPlugin::Voice_Render (TVoiceHandle, PWAV32FS, int& length) { length = 0; return FVR_Ok; }
 void _stdcall FLPlugin::MIDITick() {}
@@ -523,11 +536,38 @@ void FLPlugin::handleMidiMessage (intptr_t message)
     if (! anyRawNotes) engine.requestMidiRelease();
 }
 
-void FLPlugin::releaseVoice (TVoiceHandle handle)
+void FLPlugin::releaseVoice (TVoiceHandle handle, bool queueHostRetirement)
 {
     std::lock_guard lock (midiMutex);
-    if (activeVoices.erase (handle) == 0) return; // Release and Kill can both arrive for one voice.
+    if (! queueHostRetirement)
+        pendingHostVoiceKills.erase (handle); // FL is already destroying it during teardown/polyphony limiting.
+    const auto active = activeVoices.find (handle);
+    if (active == activeVoices.end()) return; // Release and Kill can both arrive for one voice.
+    if (queueHostRetirement)
+        pendingHostVoiceKills.insert_or_assign (handle, active->second);
+    activeVoices.erase (active);
     if (activeVoices.empty()) engine.requestMidiRelease();
+}
+
+void FLPlugin::retireReleasedHostVoices()
+{
+    std::vector<intptr_t> hostVoiceTags;
+    {
+        std::lock_guard lock (midiMutex);
+        hostVoiceTags.reserve (pendingHostVoiceKills.size());
+        for (const auto& [handle, hostVoiceTag] : pendingHostVoiceKills)
+        {
+            static_cast<void> (handle);
+            hostVoiceTags.push_back (hostVoiceTag);
+        }
+        pendingHostVoiceKills.clear();
+    }
+
+    // Sender is FL's SetTag from TriggerVoice, not Pattern Bank's returned
+    // TVoiceHandle. KillHandle=false says our local handle is already gone.
+    if (host != nullptr)
+        for (const auto hostVoiceTag : hostVoiceTags)
+            host->Voice_Kill (hostVoiceTag, false);
 }
 void _stdcall FLPlugin::MsgIn (intptr_t) {}
 int _stdcall FLPlugin::OutputVoice_ProcessEvent (TOutVoiceHandle, int, int, int) { return 0; }
