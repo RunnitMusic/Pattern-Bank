@@ -1217,6 +1217,38 @@ void PatternEditor::normalizeLevels()
     replaceCurrentPattern (pattern);
 }
 
+bool PatternEditor::doubleCurrentPattern()
+{
+    const auto state = model.snapshot();
+    const auto selectedLane = std::clamp (lane, 0, maxLanes - 1);
+    const auto slot = state->lanes[selectedLane].selectedPattern;
+    const auto doubled = patternBank (state->lanes[selectedLane]).patterns[slot].doubled();
+    if (! doubled.has_value()) return false;
+
+    model.mutate ([selectedLane, slot, pattern = *doubled] (ProjectState& s)
+    {
+        auto& target = s.lanes[selectedLane];
+        auto& bank = editPatternBank (target);
+        bank.patterns[slot] = pattern;
+        bank.occupied[slot] = true;
+        if (target.sync)
+        {
+            const auto wantedBeats = divisionBeats (target.division) * 2.0;
+            int closest = 0;
+            for (int candidate = 1; candidate < 27; ++candidate)
+                if (std::abs (divisionBeats (candidate) - wantedBeats)
+                    < std::abs (divisionBeats (closest) - wantedBeats))
+                    closest = candidate;
+            target.division = closest;
+        }
+        else target.speedHz = std::max (0.01f, target.speedHz * 0.5f);
+    });
+    selected.fill (false);
+    activePoint = activeTension = -1;
+    repaint();
+    return true;
+}
+
 void PatternEditor::smoothAbruptChanges()
 {
     const auto state = model.snapshot();

@@ -33,6 +33,7 @@ public:
     void flipVertically();
     void flipHorizontally();
     void normalizeLevels();
+    bool doubleCurrentPattern();
     void smoothAbruptChanges();
     void smoothUp (float smooth, float decimation);
     void beginSmoothPreview();

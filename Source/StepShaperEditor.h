@@ -18,6 +18,7 @@ public:
     std::function<void (int)> onChange;
     std::function<void()> onGestureEnd;
     std::function<void()> onRequestMenu;
+    std::function<void()> onMainBoxClick;
     std::function<void (juce::Point<int>)> onParameterMenu;
     std::function<void (juce::String)> onRename;
 
@@ -70,6 +71,21 @@ public:
     void mouseMove (const juce::MouseEvent&) override;
 
 private:
+    class LaneButton final : public juce::TextButton
+    {
+    public:
+        std::function<void (juce::Point<int>)> onRightClick;
+        void mouseDown (const juce::MouseEvent& event) override
+        {
+            if (event.mods.isPopupMenu() || event.mods.isRightButtonDown())
+            {
+                if (onRightClick) onRightClick (event.getScreenPosition());
+                return;
+            }
+            juce::TextButton::mouseDown (event);
+        }
+    };
+
     class RateSlider : public juce::Slider
     {
     public:
@@ -199,6 +215,8 @@ private:
     void showSmoothUpDialog();
     void openPatternFile();
     void savePatternFile();
+    void openLaneBankFile();
+    void saveLaneBankFile();
     juce::File patternDataDirectory() const;
     void setSpeedModDepth (int source, float depth);
     bool isOverSpeedKnob (juce::Point<int> screenPosition) const;
@@ -219,7 +237,7 @@ private:
     GridControl gridXControl { "GRID X" };
     GridControl gridYControl { "GRID Y" };
     juce::TextButton patternStateMenuButton { juce::String::fromUTF8 ("\xe2\x96\xb8") };
-    std::array<juce::TextButton, maxLanes> laneButtons;
+    std::array<LaneButton, maxLanes> laneButtons;
     juce::TextButton addLaneButton { "+" };
     juce::TextButton undoButton { juce::String::fromUTF8 ("\xe2\x86\xb6") };
     juce::TextButton redoButton { juce::String::fromUTF8 ("\xe2\x86\xb7") };

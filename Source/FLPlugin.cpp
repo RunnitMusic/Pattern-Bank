@@ -79,6 +79,24 @@ std::string parameterName (int lane, Parameter parameter)
     }
     return prefix;
 }
+
+bool usesFloatAutomation (Parameter parameter) noexcept
+{
+    switch (parameter)
+    {
+        case Parameter::speed:
+        case Parameter::division:
+        case Parameter::startPosition:
+        case Parameter::sustainPosition:
+        case Parameter::baseValue:
+        case Parameter::patternMix:
+        case Parameter::mod1:
+        case Parameter::mod2:
+            return true;
+        default:
+            return false;
+    }
+}
 } // namespace
 
 PFruityPlugInfo FLPlugin::pluginInfo() noexcept { return &info; }
@@ -150,8 +168,25 @@ intptr_t _stdcall FLPlugin::Dispatcher (intptr_t ID, intptr_t Index, intptr_t Va
         case FPD_GetParamInfo:
         {
             const auto parameter = parameterFromIndex (static_cast<int> (Index));
-            return parameter == Parameter::speed || parameter == Parameter::baseValue
-                || parameter == Parameter::patternMix ? 0 : PI_CantInterpolate;
+            switch (parameter)
+            {
+                case Parameter::speed:
+                case Parameter::startPosition:
+                case Parameter::sustainPosition:
+                case Parameter::baseValue:
+                case Parameter::mod1:
+                case Parameter::mod2:
+                    return PI_Float;
+                case Parameter::division:
+                    // FL automation clips store normalized values.  The lane
+                    // still quantizes this value to one of the 27 musical
+                    // divisions in setParameterFromHost().
+                    return PI_Float | PI_CantInterpolate;
+                case Parameter::patternMix:
+                    return PI_Float | PI_Centered;
+                default:
+                    return PI_CantInterpolate;
+            }
         }
         case FPD_PreferredNumIO:
             // The SDK documents this query as Patcher-specific. Its controller
@@ -231,7 +266,8 @@ void _stdcall FLPlugin::GetName (int section, int index, int value, char* name)
     if (section != FPN_ParamValue) { copyName (name, ""); return; }
 
     auto lane = model.snapshot()->lanes[laneIndex];
-    setParameterFromHost (lane, parameter, decodeModernFLParameterValue (value));
+    setParameterFromHost (lane, parameter, usesFloatAutomation (parameter)
+        ? decodeFLFloatParameterValue (value) : decodeModernFLParameterValue (value));
     char buffer[64] {};
     switch (parameter)
     {
@@ -303,12 +339,20 @@ int _stdcall FLPlugin::ProcessParam (int index, intptr_t value, int recFlags)
     if (index < 0 || index >= parameterCount) return 0;
     const auto lane = laneFromParameterIndex (index);
     const auto parameter = parameterFromIndex (index);
-    const auto fromLegacyController = (recFlags & (REC_FromMIDI | REC_InternalCtrl)) != 0;
+    // Direct automation/MIDI writes retain the SDK's classic 0..65536 input
+    // range. Patcher and other internal controllers send the modern 30-bit
+    // parameter range even when FL also sets REC_FromMIDI.
+    const auto legacyInput = (recFlags & REC_FromMIDI) != 0
+        && (recFlags & REC_InternalCtrl) == 0
+        && ! hostedInPatcher.load (std::memory_order_acquire);
+    const auto decodedValue = usesFloatAutomation (parameter)
+        ? decodeFLFloatParameterValue (value)
+        : decodeFLParameterValue (value, legacyInput);
     if (parameter == Parameter::retrigger)
     {
         if ((recFlags & REC_UpdateValue) != 0)
         {
-            const auto isDown = decodeModernFLParameterValue (value) >= 32768;
+            const auto isDown = decodedValue >= 32768;
             const auto wasDown = retriggerParameterDown[lane].exchange (isDown, std::memory_order_acq_rel);
             if (isDown != wasDown)
             {
@@ -317,15 +361,15 @@ int _stdcall FLPlugin::ProcessParam (int index, intptr_t value, int recFlags)
             }
         }
         return encodeFLParameterReturnValue (
-            retriggerParameterDown[lane].load (std::memory_order_relaxed) ? 65536 : 0,
-            fromLegacyController);
+            retriggerParameterDown[lane].load (std::memory_order_relaxed) ? 65536 : 0);
     }
-    // REC_FromMIDI describes the value's origin/range; it is not a write request by itself.
-    // Patcher can set it on queries, so mutating without REC_UpdateValue can zero our state.
+    // REC_FromMIDI is not a write request by itself. Patcher can set it on queries,
+    // so mutating without REC_UpdateValue can zero our state.
     if ((recFlags & REC_UpdateValue) != 0)
-        model.setParameterRealtime (lane, parameter, decodeModernFLParameterValue (value));
-    return encodeFLParameterReturnValue (model.realtimeParameterValue (lane, parameter),
-                                         fromLegacyController);
+        model.setParameterRealtime (lane, parameter, decodedValue);
+    const auto currentValue = model.realtimeParameterValue (lane, parameter);
+    return usesFloatAutomation (parameter) ? encodeFLFloatParameterValue (currentValue)
+                                           : encodeFLParameterReturnValue (currentValue);
 }
 
 void _stdcall FLPlugin::NewTick()
@@ -415,6 +459,10 @@ void FLPlugin::showEditor (HWND parent)
 void FLPlugin::showParameterMenu (int lane, Parameter parameter, juce::Point<int> screenPosition)
 {
     if (host == nullptr) return;
+    // FL seeds a new automation clip from its cached value. Pattern preset
+    // recalls can change Speed and the other per-pattern settings internally,
+    // so refresh that cache before opening the native parameter menu.
+    editorParameterChanged (lane, parameter);
     const auto index = parameterIndex (lane, parameter);
     juce::PopupMenu menu;
     std::vector<int> hostItems;
@@ -454,8 +502,11 @@ void FLPlugin::hideEditor()
 void FLPlugin::editorParameterChanged (int lane, Parameter parameter)
 {
     if (host == nullptr) return;
-    const auto value = static_cast<intptr_t> (model.realtimeParameterValue (lane, parameter)) * modernFLValueScale;
-    host->OnParamChanged (HostTag, parameterIndex (lane, parameter), static_cast<int> (value));
+    const auto internalValue = model.realtimeParameterValue (lane, parameter);
+    const auto value = usesFloatAutomation (parameter)
+        ? encodeFLFloatParameterValue (internalValue)
+        : encodeFLParameterReturnValue (internalValue);
+    host->OnParamChanged (HostTag, parameterIndex (lane, parameter), value);
     if (parameter == Parameter::speed || parameter == Parameter::division
         || parameter == Parameter::baseValue || parameter == Parameter::patternMix)
     {

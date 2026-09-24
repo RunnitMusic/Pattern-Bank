@@ -1,6 +1,7 @@
 #include "Core.h"
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <cctype>
 #include <cstring>
@@ -886,6 +887,23 @@ Pattern Pattern::withModulation (float mod1, float mod2) const noexcept
     return result;
 }
 
+std::optional<Pattern> Pattern::doubled() const noexcept
+{
+    if (count < 2 || static_cast<int> (count) * 2 > maxPoints) return std::nullopt;
+    Pattern result;
+    result.count = static_cast<std::uint8_t> (count * 2);
+    for (int half = 0; half < 2; ++half)
+        for (int point = 0; point < count; ++point)
+        {
+            auto copy = points[point];
+            copy.x = copy.x * 0.5f + static_cast<float> (half) * 0.5f;
+            for (auto& depth : copy.modX) depth *= 0.5f;
+            result.points[half * count + point] = copy;
+        }
+    result.normalise();
+    return result;
+}
+
 void Pattern::normalise() noexcept
 {
     count = static_cast<std::uint8_t> (std::clamp<int> (count, 2, maxPoints));
@@ -1084,6 +1102,9 @@ Model::Model() : state (std::make_unique<ProjectState>())
     writeRealtimeFromStateLocked();
     std::atomic_store_explicit (&published, std::make_shared<const ProjectState> (*state),
                                 std::memory_order_release);
+    loadFactoryBank (0, FactoryBank::filters);
+    undoStack.clear();
+    redoStack.clear();
 }
 
 std::shared_ptr<const ProjectState> Model::snapshot() const noexcept
@@ -1793,6 +1814,39 @@ std::vector<std::uint8_t> Model::serialize() const
     return bytes;
 }
 
+std::vector<std::uint8_t> Model::serializeLaneBank (int lane) const
+{
+    const auto source = snapshot();
+    lane = std::clamp (lane, 0, maxLanes - 1);
+    Model bankModel;
+    bankModel.mutate ([&] (ProjectState& destination)
+    {
+        destination.activeLaneCount = 1;
+        destination.selectedLane = 0;
+        destination.lanes[0] = source->lanes[lane];
+        destination.lanes[0].enabled = true;
+    }, false);
+    return bankModel.serialize();
+}
+
+bool Model::deserializeLaneBank (int lane, const void* data, std::size_t size)
+{
+    if (lane < 0 || lane >= maxLanes) return false;
+    Model imported;
+    if (! imported.deserialize (data, size)) return false;
+    const auto importedState = imported.snapshot();
+    const auto sourceLane = std::clamp (importedState->selectedLane, 0, importedState->activeLaneCount - 1);
+    const auto bankLane = importedState->lanes[sourceLane];
+    mutate ([=] (ProjectState& destination)
+    {
+        const auto wasEnabled = destination.lanes[lane].enabled;
+        destination.lanes[lane] = bankLane;
+        destination.lanes[lane].enabled = wasEnabled;
+        recallPatternSettings (destination.lanes[lane]);
+    });
+    return true;
+}
+
 bool Model::deserialize (const void* data, std::size_t size)
 {
     if (data == nullptr || size < 16) return false;
@@ -2272,7 +2326,8 @@ void Engine::tick (const TickContext& context) noexcept
         r.active = std::clamp (r.active, 0, patternsPerLane - 1);
         const auto patternValue = patternBank (lane).patterns[r.active].valueAt (r.phase, lane.mod1, lane.mod2);
         const auto amountSource = lane.amountBipolar ? patternValue * 2.0f - 1.0f : patternValue;
-        r.output = lane.enabled ? clamp01 (lane.baseValue + amountSource * lane.patternMix) : 0.0f;
+        r.output = lane.enabled ? clamp01 (lane.baseValue + amountSource * lane.patternMix)
+                                : clamp01 (lane.baseValue);
         phaseDisplay[i].store (r.phase, std::memory_order_relaxed);
         outputDisplay[i].store (r.output, std::memory_order_relaxed);
         activeDisplay[i].store (r.active, std::memory_order_relaxed);
@@ -2392,15 +2447,37 @@ intptr_t encodeFLControllerValue (float normalized, bool forPatcher) noexcept
 
 int decodeModernFLParameterValue (intptr_t value) noexcept
 {
-    if (value > 65536 || value < 0)
-        return std::clamp (static_cast<int> (std::llround (static_cast<double> (value) / modernFLValueScale)), 0, 65536);
-    return std::clamp (static_cast<int> (value), 0, 65536);
+    return std::clamp (static_cast<int> (std::llround (
+                          static_cast<double> (value) / modernFLValueScale)), 0, 65536);
 }
 
-int encodeFLParameterReturnValue (int hostValue, bool fromMidi) noexcept
+int decodeFLParameterValue (intptr_t value, bool legacyRange) noexcept
+{
+    // REC_FromMIDI is historically documented as 0..65536, but current FL can
+    // also attach it to modern values. Only use the legacy interpretation when
+    // both the context and the actual value fit that range.
+    return legacyRange && value >= 0 && value <= 65536
+        ? static_cast<int> (value)
+        : decodeModernFLParameterValue (value);
+}
+
+int encodeFLParameterReturnValue (int hostValue) noexcept
 {
     const auto legacy = std::clamp (hostValue, 0, 65536);
-    return fromMidi ? legacy : static_cast<int> (static_cast<std::int64_t> (legacy) * modernFLValueScale);
+    return static_cast<int> (static_cast<std::int64_t> (legacy) * modernFLValueScale);
+}
+
+int decodeFLFloatParameterValue (intptr_t value) noexcept
+{
+    const auto normalized = std::bit_cast<float> (static_cast<std::uint32_t> (value));
+    if (! std::isfinite (normalized)) return 0;
+    return std::clamp (static_cast<int> (std::lround (normalized * 65536.0f)), 0, 65536);
+}
+
+int encodeFLFloatParameterValue (int hostValue) noexcept
+{
+    const auto normalized = std::clamp (hostValue, 0, 65536) / 65536.0f;
+    return static_cast<int> (std::bit_cast<std::uint32_t> (normalized));
 }
 
 const char* changeModeName (ChangeMode mode) noexcept

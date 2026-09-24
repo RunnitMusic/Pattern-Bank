@@ -109,6 +109,7 @@ struct Pattern
     float valueAt (float phase) const noexcept;
     float valueAt (float phase, float mod1, float mod2) const noexcept;
     Pattern withModulation (float mod1, float mod2) const noexcept;
+    std::optional<Pattern> doubled() const noexcept;
     void normalise() noexcept;
     static Pattern factory (int index);
 };
@@ -224,6 +225,8 @@ public:
 
     std::vector<std::uint8_t> serialize() const;
     bool deserialize (const void* data, std::size_t size);
+    std::vector<std::uint8_t> serializeLaneBank (int lane) const;
+    bool deserializeLaneBank (int lane, const void* data, std::size_t size);
 
     void setParameterRealtime (int lane, Parameter parameter, int hostValue) noexcept;
     int realtimeParameterValue (int lane, Parameter parameter) const noexcept;
@@ -335,5 +338,8 @@ float curveSegment (float start, float end, float phase, float tension,
                     CurveType type = CurveType::singleCurve) noexcept;
 intptr_t encodeFLControllerValue (float normalized, bool forPatcher) noexcept;
 int decodeModernFLParameterValue (intptr_t value) noexcept;
-int encodeFLParameterReturnValue (int hostValue, bool fromMidi) noexcept;
+int decodeFLParameterValue (intptr_t value, bool legacyRange) noexcept;
+int encodeFLParameterReturnValue (int hostValue) noexcept;
+int decodeFLFloatParameterValue (intptr_t value) noexcept;
+int encodeFLFloatParameterValue (int hostValue) noexcept;
 } // namespace stepshaper

@@ -47,6 +47,10 @@ int main()
     auto state = model.snapshot();
     expect (state->activeLaneCount == 1, "starts with one LFO");
     expect (state->lanes[0].enabled && ! state->lanes[1].enabled, "only first stable output is enabled");
+    expect (patternBank (state->lanes[0]).names[0] == "Sweep Up"
+            && std::count (patternBank (state->lanes[0]).occupied.begin(),
+                           patternBank (state->lanes[0]).occupied.end(), true) == 100,
+            "new instances open with the Filters bank loaded");
     expect (model.addLane() == 1 && model.snapshot()->activeLaneCount == 2, "plus adds the next stable LFO");
 
     model.mutate ([] (ProjectState& s) { s.lanes[0].amountBipolar = true; }, false);
@@ -76,9 +80,9 @@ int main()
     Model bankModel;
     const auto addedPattern = bankModel.newPattern (0);
     bankModel.renamePattern (0, addedPattern, "Chopped Gate");
-    expect (addedPattern == 12 && patternBank (bankModel.snapshot()->lanes[0]).names[12] == "Chopped Gate",
+    expect (addedPattern == 100 && patternBank (bankModel.snapshot()->lanes[0]).names[100] == "Chopped Gate",
             "NEW creates and names the next free pattern slot");
-    expect (bankModel.deletePattern (0) && bankModel.snapshot()->lanes[0].selectedPattern == 11,
+    expect (bankModel.deletePattern (0) && bankModel.snapshot()->lanes[0].selectedPattern == 99,
             "DEL removes the current pattern and selects the nearest remaining slot");
     expect (bankModel.undo() && bankModel.canRedo() && bankModel.redo(), "undo and redo preserve pattern-bank edits");
     bankModel.loadFactoryBank (0, FactoryBank::filters);
@@ -309,6 +313,17 @@ int main()
     engine.tick (tick);
     expect (engine.activePattern (0) == 2 && engine.phase (0) >= oldPhase, "Off switches immediately while retaining phase");
 
+    model.mutate ([] (ProjectState& s)
+    {
+        s.lanes[0].enabled = false;
+        s.lanes[0].baseValue = 0.37f;
+    }, false);
+    tick.songBeat = 0.27;
+    engine.tick (tick);
+    expect (std::abs (engine.output (0) - 0.37f) < 0.0001f,
+            "a disabled LFO sends its Base value instead of zero");
+    model.mutate ([] (ProjectState& s) { s.lanes[0].enabled = true; }, false);
+
     expect (parameterIndex (0, Parameter::enabled) == enabledParameterOffset
             && parameterIndex (7, Parameter::enabled) == patternParameterOffset - 1
             && parameterIndex (0, Parameter::pattern) == patternParameterOffset
@@ -340,10 +355,31 @@ int main()
             "Patcher controller output maps to its 64-bit fixed-point range");
     expect (decodeModernFLParameterValue (static_cast<intptr_t> (1) << 29) == 32768,
             "incoming modern FL parameter values decode to the internal range");
-    expect (encodeFLParameterReturnValue (65536, true) == 65536
-            && encodeFLParameterReturnValue (65536, false) == (1 << 30)
-            && encodeFLParameterReturnValue (32768, true) == 32768,
-            "internal-controller parameter calls return FL's legacy 0-65536 range");
+    expect (decodeModernFLParameterValue (16384) == 1,
+            "low automation values stay in the modern 30-bit parameter domain");
+    expect (decodeFLParameterValue (16384, true) == 16384
+            && decodeFLParameterValue (static_cast<intptr_t> (1) << 28, false) == 16384
+            && decodeFLParameterValue (static_cast<intptr_t> (1) << 28, true) == 16384,
+            "direct automation and modern internal-controller writes decode from their respective ranges");
+    expect (encodeFLParameterReturnValue (65536) == (1 << 30)
+            && encodeFLParameterReturnValue (32768) == (1 << 29),
+            "parameter callbacks always return FL's modern 30-bit range");
+    const auto thirtyPercent = static_cast<int> (std::lround (0.3 * 65536.0));
+    expect (std::abs (decodeFLFloatParameterValue (encodeFLFloatParameterValue (thirtyPercent))
+                      - thirtyPercent) <= 1
+            && decodeFLFloatParameterValue (encodeFLFloatParameterValue (0)) == 0
+            && decodeFLFloatParameterValue (encodeFLFloatParameterValue (65536)) == 65536,
+            "normalized floating-point automation round-trips across its full 0..1 range");
+    auto divisionLane = ProjectState::defaults().lanes[0];
+    divisionLane.division = 19; // 1 bar
+    const auto oneBarHostValue = parameterToHost (divisionLane, Parameter::division);
+    expect (std::abs (decodeFLFloatParameterValue (encodeFLFloatParameterValue (oneBarHostValue))
+                      - oneBarHostValue) <= 1,
+            "sync length uses normalized floating-point automation without collapsing to zero");
+    divisionLane.division = 0;
+    setParameterFromHost (divisionLane, Parameter::division, oneBarHostValue);
+    expect (divisionLane.division == 19,
+            "the normalized sync-length automation value restores the 1 bar division");
     auto mappedLane = ProjectState::defaults().lanes[0];
     auto sparseBank = std::make_shared<PatternBank> (patternBank (mappedLane));
     sparseBank->occupied.fill (false);
@@ -377,6 +413,15 @@ int main()
     const auto displayedModulation = modulated.withModulation (1.0f, 0.0f);
     expect (displayedModulation.points[1].y < modulated.points[1].y,
             "the editor projection exposes the same modulated point movement");
+    auto repeatSource = Pattern::factory (0);
+    repeatSource.points[1].modX[0] = 0.4f;
+    const auto repeated = repeatSource.doubled();
+    expect (repeated.has_value() && repeated->count == repeatSource.count * 2
+            && std::abs (repeated->points[1].x - 0.5f) < 0.0001f
+            && std::abs (repeated->points[2].x - 0.5f) < 0.0001f
+            && std::abs (repeated->points[3].modX[0] - 0.2f) < 0.0001f
+            && repeated->valueAt (0.499f) > 0.99f && repeated->valueAt (0.5f) < 0.01f,
+            "doubling repeats the complete pattern in two halves and scales X modulation with it");
     Pattern xModulated;
     xModulated.count = 5;
     xModulated.points[0] = { 0.0f, 0.0f, 0.0f };
@@ -861,6 +906,22 @@ int main()
             "state round-trip retains pattern names, Base/Amount values, and Amount mode");
     expect (! restored.deserialize ("bad", 3), "corrupt state is rejected");
 
+    const auto laneBankBytes = restored.serializeLaneBank (0);
+    Model laneBankDestination;
+    laneBankDestination.addLane();
+    laneBankDestination.mutate ([] (ProjectState& s)
+    {
+        s.lanes[1].enabled = false;
+        editPatternBank (s.lanes[0]).names[0] = "Destination untouched";
+    }, false);
+    expect (laneBankDestination.deserializeLaneBank (1, laneBankBytes.data(), laneBankBytes.size()),
+            "a complete LFO bank imports into one selected slot");
+    expect (patternBank (laneBankDestination.snapshot()->lanes[1]).names[2] == "Saved Name"
+            && ! laneBankDestination.snapshot()->lanes[1].enabled,
+            "LFO bank import restores every preset while preserving the destination enable switch");
+    expect (patternBank (laneBankDestination.snapshot()->lanes[0]).names[0] == "Destination untouched",
+            "LFO bank import does not overwrite the other seven slots");
+
     restored.mutate ([] (ProjectState& s) { s.editorGridX = 99; s.editorGridY = 99; }, false);
     expect (restored.snapshot()->editorGridX == 48 && restored.snapshot()->editorGridY == 48,
             "grid resolution is capped at 48 divisions on both axes");
@@ -868,7 +929,7 @@ int main()
     restored.setParameterRealtime (0, Parameter::pattern, 65536);
     expect (restored.realtimeParameterValue (0, Parameter::pattern) == 65536,
             "automation writes to the lock-free realtime parameter layer");
-    expect (restored.synchroniseRealtimeParameters() && restored.snapshot()->lanes[0].selectedPattern == 11,
+    expect (restored.synchroniseRealtimeParameters() && restored.snapshot()->lanes[0].selectedPattern == 99,
             "GUI/state synchronization maps automation to the nearest occupied pattern without adding undo");
 
     for (int pattern = 0; pattern < patternsPerLane; ++pattern)

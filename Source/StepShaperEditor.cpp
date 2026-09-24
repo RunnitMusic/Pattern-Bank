@@ -254,7 +254,11 @@ void VerticalPatternSelector::mouseDown (const juce::MouseEvent& event)
         else if (onRequestMenu) onRequestMenu();
         return;
     }
-    if (! switcherBounds().contains (event.position)) return;
+    if (! switcherBounds().contains (event.position))
+    {
+        if (onMainBoxClick) onMainBoxClick();
+        return;
+    }
     grabKeyboardFocus();
     draggingSwitcher = true;
     dragStartOrdinal = currentOrdinal;
@@ -997,6 +1001,26 @@ StepShaperEditor::StepShaperEditor (Model& modelToUse, Engine* engineToDisplay, 
         styleButton (button, "Edit LFO " + juce::String (i + 1));
         button.setColour (juce::TextButton::buttonOnColourId, laneAccent);
         button.onClick = [this, i] { model.selectLane (i); refreshFromModel (true); };
+        button.onRightClick = [this, i] (juce::Point<int> position)
+        {
+            const auto state = model.snapshot();
+            if (i >= state->activeLaneCount) return;
+            juce::PopupMenu menu;
+            menu.addItem (1, "Enabled", true, state->lanes[i].enabled);
+            const auto safe = juce::Component::SafePointer<StepShaperEditor> (this);
+            menu.showMenuAsync (juce::PopupMenu::Options().withTargetScreenArea (
+                                    { position.x, position.y, 1, 1 }),
+                                [safe, i] (int result)
+                                {
+                                    if (safe == nullptr || result != 1) return;
+                                    safe->model.mutate ([i] (ProjectState& s)
+                                    {
+                                        s.lanes[i].enabled = ! s.lanes[i].enabled;
+                                    });
+                                    safe->notifyParameter (i, Parameter::enabled);
+                                    safe->refreshFromModel (true);
+                                });
+        };
         addAndMakeVisible (button);
     }
 
@@ -1127,6 +1151,7 @@ StepShaperEditor::StepShaperEditor (Model& modelToUse, Engine* engineToDisplay, 
         patternList.toFront (true);
         patternList.repaint();
     };
+    patternSelector.onMainBoxClick = [this] { patternList.setVisible (false); };
     patternSelector.onParameterMenu = [this] (juce::Point<int> position)
     {
         const auto lane = model.snapshot()->selectedLane;
@@ -1481,6 +1506,8 @@ void StepShaperEditor::showPatternStateMenu()
     menu.addSectionHeader ("STATE");
     menu.addItem (1, "Open pattern file...");
     menu.addItem (2, "Save pattern file...");
+    menu.addItem (6, "Open LFO bank into this slot...");
+    menu.addItem (7, "Save this LFO bank...");
     menu.addSeparator();
     menu.addItem (3, "Copy state");
     menu.addItem (4, "Paste state", juce::SystemClipboard::getTextFromClipboard().isNotEmpty()
@@ -1494,6 +1521,7 @@ void StepShaperEditor::showPatternStateMenu()
     menu.addItem (13, "Smooth up...");
     menu.addItem (14, "Smooth abrupt changes");
     menu.addItem (15, "Turn all points smooth");
+    menu.addItem (16, "Double current pattern");
     const auto safe = juce::Component::SafePointer<StepShaperEditor> (this);
     menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&patternStateMenuButton),
                         [safe] (int result)
@@ -1501,6 +1529,8 @@ void StepShaperEditor::showPatternStateMenu()
                             if (safe == nullptr || result == 0) return;
                             if (result == 1) { safe->openPatternFile(); return; }
                             if (result == 2) { safe->savePatternFile(); return; }
+                            if (result == 6) { safe->openLaneBankFile(); return; }
+                            if (result == 7) { safe->saveLaneBankFile(); return; }
                             const auto state = safe->model.snapshot();
                             const auto lane = state->selectedLane;
                             const auto slot = state->lanes[lane].selectedPattern;
@@ -1527,6 +1557,20 @@ void StepShaperEditor::showPatternStateMenu()
                             if (result == 13) safe->showSmoothUpDialog();
                             if (result == 14) safe->patternEditor.smoothAbruptChanges();
                             if (result == 15) safe->patternEditor.turnAllPointsSmooth();
+                            if (result == 16)
+                            {
+                                const auto doubled = safe->patternEditor.doubleCurrentPattern();
+                                if (doubled)
+                                {
+                                    const auto& updated = safe->model.snapshot()->lanes[lane];
+                                    safe->notifyParameter (lane, updated.sync ? Parameter::division : Parameter::speed);
+                                    safe->refreshFromModel (true);
+                                }
+                                safe->statusLabel.setText (
+                                    doubled ? "CURRENT PATTERN DOUBLED"
+                                            : "TOO MANY POINTS TO DOUBLE PATTERN",
+                                    juce::dontSendNotification);
+                            }
                         });
 }
 
@@ -1617,6 +1661,65 @@ void StepShaperEditor::savePatternFile()
                                          safe->statusLabel.setText (ok ? "PATTERN SAVED: " + file.getFileNameWithoutExtension()
                                                                       : "COULD NOT SAVE PATTERN",
                                                                     juce::dontSendNotification);
+                                     });
+}
+
+void StepShaperEditor::openLaneBankFile()
+{
+    const auto directory = patternDataDirectory();
+    directory.createDirectory();
+    const auto destinationLane = model.snapshot()->selectedLane;
+    patternFileChooser = std::make_unique<juce::FileChooser> (
+        "Open Pattern Bank LFO bank", directory, "*.pbbank", true);
+    const auto safe = juce::Component::SafePointer<StepShaperEditor> (this);
+    patternFileChooser->launchAsync (juce::FileBrowserComponent::openMode
+                                     | juce::FileBrowserComponent::canSelectFiles,
+                                     [safe, destinationLane] (const juce::FileChooser& chooser)
+                                     {
+                                         if (safe == nullptr) return;
+                                         const auto file = chooser.getResult();
+                                         if (! file.existsAsFile()) return;
+                                         juce::MemoryBlock data;
+                                         const auto loaded = file.loadFileAsData (data)
+                                             && safe->model.deserializeLaneBank (
+                                                 destinationLane, data.getData(), data.getSize());
+                                         if (loaded)
+                                         {
+                                             safe->model.selectLane (destinationLane);
+                                             safe->notifyAllLaneParameters (destinationLane);
+                                             safe->refreshFromModel (true);
+                                         }
+                                         safe->statusLabel.setText (
+                                             loaded ? "LFO BANK LOADED: " + file.getFileNameWithoutExtension()
+                                                    : "INVALID LFO BANK FILE",
+                                             juce::dontSendNotification);
+                                     });
+}
+
+void StepShaperEditor::saveLaneBankFile()
+{
+    const auto directory = patternDataDirectory();
+    directory.createDirectory();
+    const auto lane = model.snapshot()->selectedLane;
+    const auto suggested = "LFO " + juce::String (lane + 1) + " Bank.pbbank";
+    patternFileChooser = std::make_unique<juce::FileChooser> (
+        "Save Pattern Bank LFO bank", directory.getChildFile (suggested), "*.pbbank", true);
+    const auto safe = juce::Component::SafePointer<StepShaperEditor> (this);
+    patternFileChooser->launchAsync (juce::FileBrowserComponent::saveMode
+                                     | juce::FileBrowserComponent::canSelectFiles
+                                     | juce::FileBrowserComponent::warnAboutOverwriting,
+                                     [safe, lane] (const juce::FileChooser& chooser)
+                                     {
+                                         if (safe == nullptr) return;
+                                         auto file = chooser.getResult();
+                                         if (file == juce::File()) return;
+                                         file = file.withFileExtension (".pbbank");
+                                         const auto bytes = safe->model.serializeLaneBank (lane);
+                                         const auto saved = file.replaceWithData (bytes.data(), bytes.size());
+                                         safe->statusLabel.setText (
+                                             saved ? "LFO BANK SAVED: " + file.getFileNameWithoutExtension()
+                                                   : "COULD NOT SAVE LFO BANK",
+                                             juce::dontSendNotification);
                                      });
 }
 
@@ -1914,6 +2017,7 @@ void StepShaperEditor::refreshFromModel (bool force)
     {
         laneButtons[i].setVisible (i < state->activeLaneCount);
         laneButtons[i].setToggleState (i == lane, juce::dontSendNotification);
+        laneButtons[i].setAlpha (state->lanes[i].enabled ? 1.0f : 0.5f);
     }
     addLaneButton.setVisible (state->activeLaneCount < maxLanes);
     patternEditor.setLane (lane);
