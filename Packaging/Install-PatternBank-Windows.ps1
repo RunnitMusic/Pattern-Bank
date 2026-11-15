@@ -41,11 +41,20 @@ function Get-FLInstallations {
         )
         foreach ($root in $uninstallRoots) {
             Get-ItemProperty -Path $root -ErrorAction SilentlyContinue |
-                Where-Object {
-                    $_.DisplayName -like 'FL Studio*' -and
-                    -not [string]::IsNullOrWhiteSpace($_.InstallLocation)
-                } |
-                ForEach-Object { $candidates.Add([string]$_.InstallLocation) }
+                ForEach-Object {
+                    # Uninstall registry keys are not required to define either
+                    # value. Access the property collection explicitly so that
+                    # incomplete third-party entries remain safe under StrictMode.
+                    $displayNameProperty = $_.PSObject.Properties['DisplayName']
+                    $installLocationProperty = $_.PSObject.Properties['InstallLocation']
+                    if ($null -ne $displayNameProperty -and
+                        $null -ne $installLocationProperty -and
+                        [string]$displayNameProperty.Value -like 'FL Studio*' -and
+                        -not [string]::IsNullOrWhiteSpace(
+                            [string]$installLocationProperty.Value)) {
+                        $candidates.Add([string]$installLocationProperty.Value)
+                    }
+                }
         }
     }
 
