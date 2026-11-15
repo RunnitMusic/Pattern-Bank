@@ -44,20 +44,25 @@ jobs:
           sw_vers
           uname -a
           xcodebuild -version
+          xcode-select -p
+          /usr/bin/clang --version
           zsh -n Packaging/Install-PatternBank-macOS.command
           zsh -n Packaging/Diagnose-PatternBank-macOS.command
       - name: Configure
         run: >-
-          cmake -S . -B build-ci -G Xcode
+          cmake -S . -B build-ci
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_C_COMPILER=/usr/bin/clang
+          -DCMAKE_CXX_COMPILER=/usr/bin/clang++
           -DSTEPSHAPER_BUILD_FL_PLUGIN=ON
           -DSTEPSHAPER_BUILD_PREVIEW=ON
           -DSTEPSHAPER_BUILD_TESTS=ON
           -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
           -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
       - name: Build
-        run: cmake --build build-ci --config Release --parallel
+        run: cmake --build build-ci --parallel
       - name: Test
-        run: ctest --test-dir build-ci -C Release --output-on-failure
+        run: ctest --test-dir build-ci --output-on-failure
       - name: Sign and verify package
         run: |
           plugin="build-ci/package/Pattern Bank/Pattern Bank_x64.dylib"
@@ -90,16 +95,19 @@ jobs:
       - uses: actions/checkout@v4
       - name: Configure Intel build
         run: >-
-          cmake -S . -B build-intel -G Xcode
+          cmake -S . -B build-intel
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_C_COMPILER=/usr/bin/clang
+          -DCMAKE_CXX_COMPILER=/usr/bin/clang++
           -DSTEPSHAPER_BUILD_FL_PLUGIN=ON
           -DSTEPSHAPER_BUILD_PREVIEW=ON
           -DSTEPSHAPER_BUILD_TESTS=ON
           -DCMAKE_OSX_ARCHITECTURES=x86_64
           -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
       - name: Build
-        run: cmake --build build-intel --config Release --parallel
+        run: cmake --build build-intel --parallel
       - name: Test
-        run: ctest --test-dir build-intel -C Release --output-on-failure
+        run: ctest --test-dir build-intel --output-on-failure
       - name: Verify Intel plug-in
         run: |
           plugin="build-intel/package/Pattern Bank/Pattern Bank_x64.dylib"
