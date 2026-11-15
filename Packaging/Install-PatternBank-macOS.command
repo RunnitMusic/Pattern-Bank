@@ -74,7 +74,8 @@ for fl_app in "${fl_apps[@]}"; do
   sudo xattr -dr com.apple.quarantine "${destination}" 2>/dev/null || true
   sudo codesign --force --sign - "${destination}/Pattern Bank_x64.dylib"
 
-  lipo "${destination}/Pattern Bank_x64.dylib" -verify_arch arm64 x86_64
+  lipo "${destination}/Pattern Bank_x64.dylib" -verify_arch arm64
+  lipo "${destination}/Pattern Bank_x64.dylib" -verify_arch x86_64
   codesign --verify --strict --verbose=2 "${destination}/Pattern Bank_x64.dylib"
   if xattr -p com.apple.quarantine "${destination}/Pattern Bank_x64.dylib" >/dev/null 2>&1; then
     fail "Quarantine is still present after installation: ${destination}"
