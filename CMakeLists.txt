@@ -14,6 +14,8 @@ endif()
 option(STEPSHAPER_BUILD_FL_PLUGIN "Build the native FL Studio controller DLL" ON)
 option(STEPSHAPER_BUILD_PREVIEW "Build the standalone UI preview" ON)
 option(STEPSHAPER_BUILD_TESTS "Build core tests" ON)
+option(STEPSHAPER_BUILD_VST3_OUTPUT_TESTER
+    "Build the minimal VST3 output-parameter compatibility probe" OFF)
 
 add_library(StepShaperCore STATIC
     Source/Core.cpp
@@ -29,7 +31,7 @@ else()
     target_compile_options(StepShaperCore PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
-if(STEPSHAPER_BUILD_FL_PLUGIN OR STEPSHAPER_BUILD_PREVIEW)
+if(STEPSHAPER_BUILD_FL_PLUGIN OR STEPSHAPER_BUILD_PREVIEW OR STEPSHAPER_BUILD_VST3_OUTPUT_TESTER)
     set(STEPSHAPER_JUCE_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../JUCE" CACHE PATH
         "Optional path to a local JUCE checkout")
     if(EXISTS "${STEPSHAPER_JUCE_SOURCE_DIR}/CMakeLists.txt")
@@ -57,6 +59,34 @@ if(STEPSHAPER_BUILD_FL_PLUGIN OR STEPSHAPER_BUILD_PREVIEW)
         JUCE_USE_CURL=0)
 endif()
 
+if(STEPSHAPER_BUILD_VST3_OUTPUT_TESTER)
+    juce_add_plugin(VST3OutputProbe
+        COMPANY_NAME "Runnit"
+        PLUGIN_MANUFACTURER_CODE Rnnt
+        PLUGIN_CODE Vopb
+        PRODUCT_NAME "Pattern Bank VST3 Output Probe"
+        DESCRIPTION "Tests whether a host exposes VST3 output parameter changes"
+        FORMATS VST3
+        IS_SYNTH FALSE
+        NEEDS_MIDI_INPUT FALSE
+        NEEDS_MIDI_OUTPUT FALSE
+        IS_MIDI_EFFECT FALSE
+        EDITOR_WANTS_KEYBOARD_FOCUS FALSE
+        COPY_PLUGIN_AFTER_BUILD FALSE
+        VST3_CATEGORIES Fx
+        VST3_AUTO_MANIFEST FALSE)
+    target_sources(VST3OutputProbe PRIVATE
+        Tools/VST3OutputProbe/PluginProcessor.cpp
+        Tools/VST3OutputProbe/PluginProcessor.h)
+    target_link_libraries(VST3OutputProbe PRIVATE
+        juce::juce_audio_processors
+        juce::juce_gui_basics)
+    target_compile_definitions(VST3OutputProbe PUBLIC
+        JUCE_WEB_BROWSER=0
+        JUCE_USE_CURL=0
+        JUCE_VST3_CAN_REPLACE_VST2=0)
+endif()
+
 if(STEPSHAPER_BUILD_FL_PLUGIN)
     if(NOT WIN32 AND NOT APPLE)
         message(FATAL_ERROR "The native FL Studio SDK target supports Windows and macOS")
@@ -82,6 +112,7 @@ if(STEPSHAPER_BUILD_FL_PLUGIN)
         $<$<PLATFORM_ID:Windows>:NOMINMAX>)
     set_target_properties(StepShaperFL PROPERTIES
         PREFIX "")
+    set(STEPSHAPER_PACKAGE_ROOT "${CMAKE_BINARY_DIR}/package")
     set(STEPSHAPER_PACKAGE_DIR "${CMAKE_BINARY_DIR}/package/Pattern Bank")
     if(WIN32)
         set_target_properties(StepShaperFL PROPERTIES OUTPUT_NAME "Pattern Bank")
@@ -99,6 +130,28 @@ if(STEPSHAPER_BUILD_FL_PLUGIN)
             "${CMAKE_CURRENT_SOURCE_DIR}/Packaging/Plugin.nfo"
             "${STEPSHAPER_PACKAGE_DIR}/Plugin.nfo"
         VERBATIM)
+    if(WIN32)
+        add_custom_command(TARGET StepShaperFL POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${CMAKE_CURRENT_SOURCE_DIR}/Packaging/Install-PatternBank-Windows.ps1"
+                "${STEPSHAPER_PACKAGE_ROOT}/Install-PatternBank-Windows.ps1"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${CMAKE_CURRENT_SOURCE_DIR}/Packaging/Install-PatternBank-Windows.cmd"
+                "${STEPSHAPER_PACKAGE_ROOT}/Install-PatternBank-Windows.cmd"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${CMAKE_CURRENT_SOURCE_DIR}/Packaging/Diagnose-PatternBank-Windows.ps1"
+                "${STEPSHAPER_PACKAGE_ROOT}/Diagnose-PatternBank-Windows.ps1"
+            VERBATIM)
+    else()
+        add_custom_command(TARGET StepShaperFL POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${CMAKE_CURRENT_SOURCE_DIR}/Packaging/Install-PatternBank-macOS.command"
+                "${STEPSHAPER_PACKAGE_ROOT}/Install-PatternBank-macOS.command"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${CMAKE_CURRENT_SOURCE_DIR}/Packaging/Diagnose-PatternBank-macOS.command"
+                "${STEPSHAPER_PACKAGE_ROOT}/Diagnose-PatternBank-macOS.command"
+            VERBATIM)
+    endif()
 endif()
 
 if(STEPSHAPER_BUILD_PREVIEW)
@@ -121,4 +174,10 @@ if(STEPSHAPER_BUILD_TESTS)
     add_test(NAME StepShaperCoreTests COMMAND StepShaperCoreTests)
     add_executable(StepShaperCoreBenchmark Tests/CoreBenchmark.cpp)
     target_link_libraries(StepShaperCoreBenchmark PRIVATE StepShaperCore)
+    if(APPLE AND STEPSHAPER_BUILD_FL_PLUGIN)
+        add_executable(StepShaperMacDylibSmoke Tests/MacDylibSmoke.cpp)
+        target_link_libraries(StepShaperMacDylibSmoke PRIVATE ${CMAKE_DL_LIBS})
+        add_test(NAME StepShaperMacDylibSmoke
+            COMMAND StepShaperMacDylibSmoke $<TARGET_FILE:StepShaperFL>)
+    endif()
 endif()

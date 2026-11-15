@@ -11,6 +11,8 @@ CMakeUserPresets.json
 /third_party/fpsdk/.git.disabled/
 *.log
 *.tmp
+/Packaging/VST3 Output Probe/
+/Packaging/Pattern-Bank-VST3-Output-Probe-Windows.zip
 
 # Platform metadata
 .DS_Store

@@ -24,18 +24,28 @@ jobs:
         run: cmake --build build-ci --config Release --parallel
       - name: Test
         run: ctest --test-dir build-ci -C Release --output-on-failure
+      - name: Create Windows release archive
+        shell: pwsh
+        run: Compress-Archive -Path 'build-ci/package/*' -DestinationPath 'Pattern-Bank-Windows-x64.zip' -Force
       - name: Upload Windows package
         uses: actions/upload-artifact@v4
         with:
           name: Pattern-Bank-Windows-x64
-          path: build-ci/package/Pattern Bank
+          path: Pattern-Bank-Windows-x64.zip
           if-no-files-found: error
 
-  macos:
-    name: macOS universal experimental
-    runs-on: macos-15
+  macos-universal:
+    name: macOS 27 universal
+    runs-on: xcode-27
     steps:
       - uses: actions/checkout@v4
+      - name: Environment
+        run: |
+          sw_vers
+          uname -a
+          xcodebuild -version
+          zsh -n Packaging/Install-PatternBank-macOS.command
+          zsh -n Packaging/Diagnose-PatternBank-macOS.command
       - name: Configure
         run: >-
           cmake -S . -B build-ci -G Xcode
@@ -48,15 +58,51 @@ jobs:
         run: cmake --build build-ci --config Release --parallel
       - name: Test
         run: ctest --test-dir build-ci -C Release --output-on-failure
-      - name: Ad-hoc sign experimental plug-in
-        run: codesign --force --sign - "build-ci/package/Pattern Bank/Pattern Bank_x64.dylib"
-      - name: Verify architectures and signature
+      - name: Sign and verify package
         run: |
-          lipo -archs "build-ci/package/Pattern Bank/Pattern Bank_x64.dylib"
-          codesign --verify --verbose "build-ci/package/Pattern Bank/Pattern Bank_x64.dylib"
+          plugin="build-ci/package/Pattern Bank/Pattern Bank_x64.dylib"
+          codesign --force --sign - "$plugin"
+          codesign --verify --strict --verbose=2 "$plugin"
+          lipo -verify_arch arm64 x86_64 "$plugin"
+          file "$plugin"
+          dependencies="$(otool -L "$plugin" | tail -n +2 | awk '{print $1}' | grep -Ev '^(/System/Library/|/usr/lib/|@rpath/|@loader_path/|@executable_path/)' || true)"
+          if [[ -n "$dependencies" ]]; then
+            echo "Unexpected external dependencies:"
+            echo "$dependencies"
+            exit 1
+          fi
+          xattr -dr com.apple.quarantine build-ci/package 2>/dev/null || true
+          chmod +x build-ci/package/*.command
+          nm -gU "$plugin" | grep 'CreatePlugInstance'
+      - name: Create macOS release archive
+        run: ditto -c -k --sequesterRsrc build-ci/package Pattern-Bank-macOS-Universal.zip
       - name: Upload macOS package
         uses: actions/upload-artifact@v4
         with:
-          name: Pattern-Bank-macOS-Universal-Experimental
-          path: build-ci/package/Pattern Bank
+          name: Pattern-Bank-macOS-Universal
+          path: Pattern-Bank-macOS-Universal.zip
           if-no-files-found: error
+
+  macos-intel-smoke:
+    name: macOS Intel smoke test
+    runs-on: macos-26-intel
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure Intel build
+        run: >-
+          cmake -S . -B build-intel -G Xcode
+          -DSTEPSHAPER_BUILD_FL_PLUGIN=ON
+          -DSTEPSHAPER_BUILD_PREVIEW=ON
+          -DSTEPSHAPER_BUILD_TESTS=ON
+          -DCMAKE_OSX_ARCHITECTURES=x86_64
+          -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
+      - name: Build
+        run: cmake --build build-intel --config Release --parallel
+      - name: Test
+        run: ctest --test-dir build-intel -C Release --output-on-failure
+      - name: Verify Intel plug-in
+        run: |
+          plugin="build-intel/package/Pattern Bank/Pattern Bank_x64.dylib"
+          lipo -verify_arch x86_64 "$plugin"
+          codesign --force --sign - "$plugin"
+          codesign --verify --strict --verbose=2 "$plugin"
