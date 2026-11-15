@@ -54,7 +54,7 @@ for fl_app in "${fl_apps[@]}"; do
     print -- '[OK] No quarantine attribute.'
   fi
 
-  bad_dependencies="$(otool -L "${plugin}" | tail -n +2 | awk '{print $1}' | \
+  bad_dependencies="$(otool -L "${plugin}" | awk '/^[[:space:]]/ { print $1 }' | \
     grep -Ev '^(/System/Library/|/usr/lib/|@rpath/|@loader_path/|@executable_path/)' || true)"
   if [[ -z "${bad_dependencies}" ]]; then
     print -- '[OK] No unexpected external library dependencies.'

@@ -71,7 +71,7 @@ jobs:
           lipo "$plugin" -verify_arch arm64
           lipo "$plugin" -verify_arch x86_64
           file "$plugin"
-          dependencies="$(otool -L "$plugin" | tail -n +2 | awk '{print $1}' | grep -Ev '^(/System/Library/|/usr/lib/|@rpath/|@loader_path/|@executable_path/)' || true)"
+          dependencies="$(otool -L "$plugin" | awk '/^[[:space:]]/ { print $1 }' | grep -Ev '^(/System/Library/|/usr/lib/|@rpath/|@loader_path/|@executable_path/)' || true)"
           if [[ -n "$dependencies" ]]; then
             echo "Unexpected external dependencies:"
             echo "$dependencies"

@@ -22,7 +22,7 @@ codesign --force --sign - "${plugin}"
 codesign --verify --strict --verbose=2 "${plugin}"
 lipo -verify_arch arm64 x86_64 "${plugin}"
 
-bad_dependencies="$(otool -L "${plugin}" | tail -n +2 | awk '{print $1}' | \
+bad_dependencies="$(otool -L "${plugin}" | awk '/^[[:space:]]/ { print $1 }' | \
   grep -Ev '^(/System/Library/|/usr/lib/|@rpath/|@loader_path/|@executable_path/)' || true)"
 if [[ -n "${bad_dependencies}" ]]; then
   echo "Unexpected external dependencies:"

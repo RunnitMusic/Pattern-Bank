@@ -21,7 +21,7 @@ archs="$(lipo -archs "${source_plugin}")"
 [[ " ${archs} " == *' arm64 '* ]] || fail 'The payload has no Apple Silicon arm64 slice.'
 [[ " ${archs} " == *' x86_64 '* ]] || fail 'The payload has no Intel x86_64 slice.'
 
-bad_dependencies="$(otool -L "${source_plugin}" | tail -n +2 | awk '{print $1}' | \
+bad_dependencies="$(otool -L "${source_plugin}" | awk '/^[[:space:]]/ { print $1 }' | \
   grep -Ev '^(/System/Library/|/usr/lib/|@rpath/|@loader_path/|@executable_path/)' || true)"
 [[ -z "${bad_dependencies}" ]] || fail "Unexpected external dependencies:\n${bad_dependencies}"
 
